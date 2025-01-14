@@ -9,8 +9,9 @@ KONNECT_CONTROL_PLANE=${KONNECT_CONTROL_PLANE:-"default"}
 KONNECT_TOKEN=${KONNECT_TOKEN:-""}
 TYK_DASHBOARD_URL=${TYK_DASHBOARD_URL:-"http://tyk-dashboard.localhost:3000"}
 TYK_AUTH_TOKEN=${TYK_AUTH_TOKEN:-""}
-KONG_DUMP_FILE=${KONG_DUMP_FILE:-"kong-dump.json"}
-KONG_OAS_FILE=${KONG_OAS_FILE:-"kong-oas.json"}
+DATA_DIR=${DATA_DIR:-"./json-data"}
+KONG_DUMP_FILE="$DATA_DIR/kong-dump.json"
+KONG_OAS_FILE="$DATA_DIR/kong-oas.json"
 
 # Print usage information
 usage() {
@@ -26,8 +27,7 @@ Options:
     --konnect-token TOKEN           Kong Connect token (required if not set in env)
     --tyk-url URL                   Tyk Dashboard URL (default: $TYK_DASHBOARD_URL)
     --tyk-token TOKEN               Tyk Auth token (required if not set in env)
-    --kong-dump FILE                Kong dump file location (default: $KONG_DUMP_FILE)
-    --kong-oas FILE                 Kong OAS file location (default: $KONG_OAS_FILE)
+    --data-dir PATH                 Directory for JSON data (default: $DATA_DIR)
 
 Environment variables:
     KONNECT_ADDR
@@ -35,8 +35,7 @@ Environment variables:
     KONNECT_TOKEN
     TYK_DASHBOARD_URL
     TYK_AUTH_TOKEN
-    KONG_DUMP_FILE
-    KONG_OAS_FILE
+    DATA_DIR
 
 EOF
 }
@@ -69,12 +68,10 @@ parse_args() {
                 TYK_AUTH_TOKEN="$2"
                 shift 2
                 ;;
-            --kong-dump)
-                KONG_DUMP_FILE="$2"
-                shift 2
-                ;;
-            --kong-oas)
-                KONG_OAS_FILE="$2"
+            --data-dir)
+                DATA_DIR="$2"
+                KONG_DUMP_FILE="$DATA_DIR/kong-dump.json"
+                KONG_OAS_FILE="$DATA_DIR/kong-oas.json"
                 shift 2
                 ;;
             *)
@@ -104,6 +101,13 @@ validate_params() {
         usage
         exit 1
     fi
+}
+
+# Prepare data directory
+prepare_data_dir() {
+    log_info "Preparing data directory: $DATA_DIR"
+    rm -rf "$DATA_DIR"
+    mkdir -p "$DATA_DIR"
 }
 
 # Log functions
@@ -172,14 +176,14 @@ transform_to_oas() {
 split_oas_files() {
     log_info "Splitting OpenAPI specs into individual files..."
     jq -r '.[].info.title' "$KONG_OAS_FILE" | while read -r title; do
-        jq ".[] | select(.info.title == \"$title\")" "$KONG_OAS_FILE" > "oas-${title}.json"
+        jq ".[] | select(.info.title == \"$title\")" "$KONG_OAS_FILE" > "$DATA_DIR/oas-${title}.json"
     done
 }
 
 # Function to import specs into Tyk
 import_to_tyk() {
     log_info "Importing OpenAPI specs into Tyk..."
-    find . -name "oas-*.json" -print0 | while IFS= read -r -d '' file; do
+    find "$DATA_DIR" -name "oas-*.json" -print0 | while IFS= read -r -d '' file; do
         log_info "Importing $file..."
         response=$(curl -s -X POST "$TYK_DASHBOARD_URL/api/apis/oas" \
             -H "Authorization: $TYK_AUTH_TOKEN" \
@@ -197,6 +201,7 @@ import_to_tyk() {
 main() {
     parse_args "$@"
     validate_params
+    prepare_data_dir
     
     log_info "Starting Kong to Tyk migration..."
     
