@@ -190,9 +190,11 @@ import_to_tyk() {
             -H "Content-Type: application/json" \
             --data @"$file")
         
-        if ! echo "$response" | jq -e . >/dev/null 2>&1; then
-            log_error "Failed to import $file. Invalid JSON response"
-            continue
+        if echo "$response" | jq -e '.Status == "OK"' >/dev/null 2>&1; then
+            log_info "Successfully imported $file"
+        else
+            log_error "Failed to import $file. Response: $response"
+            exit 1
         fi
     done
 }
