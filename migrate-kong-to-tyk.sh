@@ -132,7 +132,7 @@ export_kong_config() {
         --konnect-token "$KONNECT_TOKEN" \
         --format json \
         -o "$KONG_DUMP_FILE" \
-        gateway dump
+        gateway dump --yes
 }
 
 # Function to transform Kong config to OpenAPI specs
