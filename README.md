@@ -8,6 +8,7 @@ This script automates the migration of Kong configuration to Tyk by exporting Ko
 - Transforms Kong configuration to OpenAPI specifications using `jq`.
 - Splits the OpenAPI specifications into individual JSON files.
 - Imports the specifications into the Tyk Dashboard.
+- Skips APIs that already exist in the Tyk Dashboard.
 - Uses a dedicated directory for JSON data, which is wiped before each run.
 
 ## Disclaimer
@@ -97,13 +98,14 @@ Specify a custom directory for JSON data:
 
 4. **Import to Tyk**:
    - Imports each OpenAPI file into Tyk via its Dashboard API.
+   - Skips APIs that match the listen path of an existing API.
    - Validates the API response to ensure successful import.
 
 ## Error Handling
 
 - The script exits immediately on errors (`set -euo pipefail`).
 - Missing parameters or invalid API responses trigger clear error messages.
-- If the Tyk API response does not include `"Status": "OK"`, the process halts with an error.
+- If the Tyk API response does not include `"Status": "OK"`, the process logs an error.
 
 ## Customisation
 

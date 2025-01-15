@@ -127,6 +127,15 @@ handle_error() {
 
 trap 'handle_error $LINENO' ERR
 
+# Check if API exists in Tyk
+api_exists_in_tyk() {
+    local listen_path="$1"
+    local response
+    response=$(curl -s -X GET "$TYK_DASHBOARD_URL/api/apis?p=-1" \
+        -H "Authorization: $TYK_AUTH_TOKEN")
+    echo "$response" | jq -e ".apis[] | select(.api_definition.proxy.listen_path == \"$listen_path\")" >/dev/null 2>&1
+}
+
 # Function to export Kong configuration
 export_kong_config() {
     log_info "Exporting Kong configuration..."
@@ -175,28 +184,78 @@ transform_to_oas() {
 # Function to split OpenAPI specs into individual files
 split_oas_files() {
     log_info "Splitting OpenAPI specs into individual files..."
-    jq -r '.[].info.title' "$KONG_OAS_FILE" | while read -r title; do
+    local titles
+    titles=$(jq -r '.[].info.title' "$KONG_OAS_FILE")
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        log_error "Failed to extract API titles from OpenAPI specs"
+        exit 1
+    fi
+
+    while IFS= read -r title; do
+        [[ -z "$title" ]] && continue
         jq ".[] | select(.info.title == \"$title\")" "$KONG_OAS_FILE" > "$DATA_DIR/oas-${title}.json"
-    done
+        if [[ $? -ne 0 ]]; then
+            log_error "Failed to extract OpenAPI spec for $title"
+            exit 1
+        fi
+    done <<< "$titles"
+}
+
+# Function to import a single spec into Tyk
+import_single_spec() {
+    local file="$1"
+    local listen_path
+    listen_path=$(jq -r '."x-tyk-api-gateway".server.listenPath.value' "$file")
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to extract listen path from $file"
+        return 1
+    fi
+
+    if api_exists_in_tyk "$listen_path"; then
+        log_info "API with listen path $listen_path already exists in Tyk. Skipping import for $file."
+        return 0
+    fi
+
+    log_info "Importing $file..."
+    local response
+    response=$(curl -s -X POST "$TYK_DASHBOARD_URL/api/apis/oas" \
+        -H "Authorization: $TYK_AUTH_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data @"$file")
+    local curl_exit_status=$?
+
+    if [[ $curl_exit_status -ne 0 ]]; then
+        log_error "Failed to connect to Tyk Dashboard. curl exit status: $curl_exit_status"
+        log_error "Ensure the Tyk Dashboard is running and reachable at $TYK_DASHBOARD_URL"
+        exit 1  # Exit immediately on curl failure
+    fi
+
+    if echo "$response" | jq -e '.Status == "OK"' >/dev/null 2>&1; then
+        log_info "Successfully imported $file"
+        return 0
+    else
+        log_error "Failed to import $file. Response: $response"
+        return 1
+    fi
 }
 
 # Function to import specs into Tyk
 import_to_tyk() {
     log_info "Importing OpenAPI specs into Tyk..."
-    find "$DATA_DIR" -name "oas-*.json" -print0 | while IFS= read -r -d '' file; do
-        log_info "Importing $file..."
-        response=$(curl -s -X POST "$TYK_DASHBOARD_URL/api/apis/oas" \
-            -H "Authorization: $TYK_AUTH_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data @"$file")
-        
-        if echo "$response" | jq -e '.Status == "OK"' >/dev/null 2>&1; then
-            log_info "Successfully imported $file"
-        else
-            log_error "Failed to import $file. Response: $response"
-            exit 1
+    local failed_imports=0
+    
+    # Use while loop with find to process files
+    while IFS= read -r -d '' file; do
+        if ! import_single_spec "$file"; then
+            ((failed_imports++))
         fi
-    done
+    done < <(find "$DATA_DIR" -name "oas-*.json" -print0)
+
+    if [[ $failed_imports -gt 0 ]]; then
+        log_error "Failed to import $failed_imports API(s)"
+        return 1
+    fi
 }
 
 # Main execution
